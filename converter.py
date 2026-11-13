@@ -1,18 +1,16 @@
 """
 Core conversion logic.
 
-Two paths for DOCX:
-  1. LibreOffice headless → PDF → PyMuPDF  (faithful layout, also works for ODT)
-  2. python-docx direct parsing + Pillow     (no external tools, approximate layout)
-
-ODT always uses the LibreOffice path.
+Supported inputs:
+  - PDF  → faithful per-page PNG via PyMuPDF
+  - DOCX → approximate per-page PNG via python-docx + Pillow
+            (no real layout engine; text-only approximation)
 """
 
 from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import tempfile
 import textwrap
 import zipfile
@@ -21,66 +19,16 @@ from typing import List, Optional, Tuple
 
 import fitz  # PyMuPDF
 from docx import Document
-from docx.enum.text import WD_BREAK
 from docx.oxml.ns import qn
 from PIL import Image, ImageDraw, ImageFont
 
 
 # ---------------------------------------------------------------------------
-# LibreOffice helpers
+# PDF → PNG (faithful)
 # ---------------------------------------------------------------------------
 
-def find_soffice() -> Optional[str]:
-    """Locate the LibreOffice / OpenOffice executable."""
-    candidates = [
-        "soffice",
-        "libreoffice",
-        "soffice.exe",
-        r"C:\Program Files\LibreOffice\program\soffice.exe",
-        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
-        "/Applications/LibreOffice.app/Contents/MacOS/soffice",
-        "/usr/bin/soffice",
-        "/usr/bin/libreoffice",
-        "/usr/lib/libreoffice/program/soffice",
-    ]
-    for cmd in candidates:
-        path = shutil.which(cmd) if not os.path.isabs(cmd) else (cmd if os.path.isfile(cmd) else None)
-        if path:
-            return path
-    return None
-
-
-def convert_to_pdf(input_path: Path, out_dir: Path, soffice: str) -> Path:
-    """Convert DOCX or ODT to PDF using LibreOffice headless mode."""
-    cmd = [
-        soffice,
-        "--headless",
-        "--norestore",
-        "--nofirststartwizard",
-        "--convert-to",
-        "pdf",
-        "--outdir",
-        str(out_dir),
-        str(input_path),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"LibreOffice conversion failed (exit {result.returncode}):\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-
-    pdf_path = out_dir / f"{input_path.stem}.pdf"
-    if not pdf_path.exists():
-        pdfs = list(out_dir.glob("*.pdf"))
-        if not pdfs:
-            raise FileNotFoundError("LibreOffice did not produce a PDF file.")
-        pdf_path = max(pdfs, key=lambda p: p.stat().st_mtime)
-    return pdf_path
-
-
 def pdf_to_pngs(pdf_path: Path, out_dir: Path, dpi: int = 150) -> List[Path]:
-    """Render every page of a PDF to a PNG file."""
+    """Render every page of a PDF to a PNG file. Returns list of PNG paths."""
     doc = fitz.open(pdf_path)
     png_paths: List[Path] = []
     zoom = dpi / 72.0
@@ -98,7 +46,7 @@ def pdf_to_pngs(pdf_path: Path, out_dir: Path, dpi: int = 150) -> List[Path]:
 
 
 # ---------------------------------------------------------------------------
-# python-docx direct parsing (experimental / approximate)
+# DOCX → PNG via python-docx (approximate)
 # ---------------------------------------------------------------------------
 
 def _get_font(size: int = 14) -> ImageFont.ImageFont:
@@ -129,10 +77,8 @@ def _extract_pages_from_docx(doc: Document) -> List[str]:
     pages: List[List[str]] = [[]]
 
     for para in doc.paragraphs:
-        # Detect hard page breaks inside runs
         has_page_break = False
         for run in para.runs:
-            # python-docx exposes breaks via the underlying XML
             for br in run._element.findall(qn("w:br")):
                 if br.get(qn("w:type")) == "page":
                     has_page_break = True
@@ -147,10 +93,6 @@ def _extract_pages_from_docx(doc: Document) -> List[str]:
         if has_page_break:
             pages.append([])
 
-    # Also check for page-break-before paragraph properties (common style)
-    # Already handled roughly by the break detection above.
-
-    # Drop trailing empty page
     if pages and not pages[-1]:
         pages.pop()
 
@@ -172,18 +114,17 @@ def _render_text_to_pngs(
     Render each text block as one or more PNG pages using a simple fixed layout.
     This is intentionally approximate — it does not reproduce Word's layout engine.
     """
-    scale = dpi / 72.0
     width_px = int(page_width_in * dpi)
     height_px = int(page_height_in * dpi)
     margin_px = int(margin_in * dpi)
     usable_width = width_px - 2 * margin_px
     usable_height = height_px - 2 * margin_px
 
+    scale = dpi / 72.0
     font_size = max(10, int(11 * scale))
     font = _get_font(font_size)
     line_height = int(font_size * 1.35)
 
-    # Approximate characters per line (monospace-ish estimate)
     avg_char_width = font_size * 0.55
     max_chars = max(20, int(usable_width / avg_char_width))
 
@@ -191,7 +132,6 @@ def _render_text_to_pngs(
     page_counter = 0
 
     for block in page_texts:
-        # Word-wrap the whole block
         wrapped_lines: List[str] = []
         for paragraph in block.split("\n"):
             if not paragraph.strip():
@@ -199,7 +139,6 @@ def _render_text_to_pngs(
                 continue
             wrapped_lines.extend(textwrap.wrap(paragraph, width=max_chars) or [""])
 
-        # Paginate by height
         lines_per_page = max(1, usable_height // line_height)
         for i in range(0, len(wrapped_lines), lines_per_page):
             chunk = wrapped_lines[i : i + lines_per_page]
@@ -213,7 +152,6 @@ def _render_text_to_pngs(
                 draw.text((margin_px, y), line, fill="black", font=font)
                 y += line_height
 
-            # Small footer with page number
             footer = f"— page {page_counter} (python-docx approx.) —"
             draw.text(
                 (margin_px, height_px - margin_px // 2),
@@ -235,14 +173,13 @@ def convert_docx_python_docx(
     dpi: int = 150,
 ) -> List[Path]:
     """
-    Experimental path: parse DOCX with python-docx and render approximate pages.
+    Parse DOCX with python-docx and render approximate pages.
 
-    Limitations (important):
+    Limitations:
     - No real layout engine → line wrapping, fonts, spacing, tables, headers/footers,
       columns, floating images, etc. are only roughly approximated or ignored.
     - Images and complex tables are not rendered.
     - Page breaks are detected only when explicitly present in the XML.
-    - Useful for quick text-only previews or when LibreOffice is unavailable.
     """
     doc = Document(str(input_path))
     page_texts = _extract_pages_from_docx(doc)
@@ -265,29 +202,26 @@ def convert_document(
     input_file: str | Path,
     dpi: int = 150,
     work_dir: Optional[Path] = None,
-    method: str = "libreoffice",
 ) -> Tuple[List[Path], Path]:
     """
-    Full pipeline.
+    Full pipeline: DOCX or PDF → list of PNG paths + ZIP path.
 
-    Parameters
-    ----------
-    method : "libreoffice" | "python-docx"
-        - libreoffice : faithful visual rendering (DOCX + ODT). Requires soffice.
-        - python-docx : pure-Python approximate text rendering (DOCX only).
+    - PDF  → PyMuPDF (faithful page rendering)
+    - DOCX → python-docx + Pillow (approximate text layout)
 
     Returns
     -------
-    png_paths, zip_path
+    png_paths : list of Path
+    zip_path  : Path to a ZIP containing all PNGs
     """
     input_path = Path(input_file)
     if not input_path.exists():
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
     suffix = input_path.suffix.lower()
-    if suffix not in {".docx", ".odt", ".doc"}:
+    if suffix not in {".docx", ".doc", ".pdf"}:
         raise ValueError(
-            f"Unsupported file type '{suffix}'. Only .docx, .odt and .doc are supported."
+            f"Unsupported file type '{suffix}'. Only .docx, .doc and .pdf are supported."
         )
 
     if work_dir is None:
@@ -299,22 +233,10 @@ def convert_document(
     if local_input.resolve() != input_path.resolve():
         shutil.copy2(input_path, local_input)
 
-    method = method.lower().strip()
-
-    if method == "python-docx":
-        if suffix not in {".docx", ".doc"}:
-            raise ValueError("python-docx method only supports .docx / .doc files.")
-        png_paths = convert_docx_python_docx(local_input, work_dir, dpi=dpi)
+    if suffix == ".pdf":
+        png_paths = pdf_to_pngs(local_input, work_dir, dpi=dpi)
     else:
-        # Default: LibreOffice path
-        soffice = find_soffice()
-        if soffice is None:
-            raise RuntimeError(
-                "LibreOffice / OpenOffice not found. "
-                "Install it or switch to the 'python-docx' method for DOCX files."
-            )
-        pdf_path = convert_to_pdf(local_input, work_dir, soffice)
-        png_paths = pdf_to_pngs(pdf_path, work_dir, dpi=dpi)
+        png_paths = convert_docx_python_docx(local_input, work_dir, dpi=dpi)
 
     zip_path = work_dir / f"{input_path.stem}_pages.zip"
     create_zip(png_paths, zip_path)
