@@ -2,27 +2,32 @@
 
 Simple Python web UI that converts **DOCX** (Microsoft Word) and **ODT** (OpenDocument / LibreOffice / OpenOffice) documents into one PNG image **per page**.
 
-Two conversion paths are supported so you can compare quality and reliability:
+Two conversion paths are provided so you can compare which works better for your documents:
 
-1. **LibreOffice headless** → PDF → **PyMuPDF** (recommended, works for both DOCX and ODT)
-2. Pure fallback notes / alternative approaches documented below
+| Method | Formats | Layout quality | Dependencies |
+|--------|---------|----------------|--------------|
+| **LibreOffice** (default) | DOCX + ODT | High – real layout engine | LibreOffice must be installed |
+| **python-docx** (experimental) | DOCX only | Low – approximate text rendering | Pure Python (python-docx + Pillow) |
 
 ## Features
 
 - Upload a `.docx` or `.odt` file
-- Renders every page as a separate high-quality PNG
+- Choose conversion method in the UI
+- Renders every page as a separate PNG
 - Download individual pages or a ZIP of all pages
 - Clean Gradio interface
-- Fully local processing (no cloud services)
+- Fully local processing
 
 ## Requirements
 
-### System
+### System (for the LibreOffice path)
 
-- **LibreOffice** (or OpenOffice) must be installed and available on `PATH` as `soffice` / `libreoffice`.
+- **LibreOffice** (or OpenOffice) available on `PATH` as `soffice` / `libreoffice`.
   - Ubuntu/Debian: `sudo apt install libreoffice`
   - macOS: `brew install --cask libreoffice`
   - Windows: install from [libreoffice.org](https://www.libreoffice.org/) and ensure `soffice.exe` is on PATH
+
+The **python-docx** path does **not** need LibreOffice.
 
 ### Python
 
@@ -36,39 +41,39 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Then open the local URL shown in the terminal (usually http://127.0.0.1:7860).
+Open the local URL shown in the terminal (usually http://127.0.0.1:7860).
 
-## How it works
+## How the paths work
 
-1. The uploaded document is saved to a temporary directory.
-2. LibreOffice is invoked in headless mode to convert the document to PDF:
+### 1. LibreOffice (recommended)
+
+1. Document is converted to PDF with LibreOffice headless:
    ```bash
    soffice --headless --convert-to pdf --outdir <tmp> <input>
    ```
-3. Each page of the resulting PDF is rendered to PNG with **PyMuPDF** (fitz) at 150 DPI (configurable).
-4. PNGs are returned to the Gradio UI for preview and download. A ZIP archive of all pages is also provided.
+2. Each PDF page is rendered to PNG with **PyMuPDF** at the chosen DPI.
 
-This path works well for both DOCX and ODT and usually produces the most faithful visual results.
+This produces the most faithful visual results for both DOCX and ODT.
 
-## Alternative / experimental paths
+### 2. python-docx (experimental)
 
-You can experiment with other approaches and compare quality:
+1. The DOCX is parsed with **python-docx**.
+2. Text is extracted; explicit page breaks are detected when present.
+3. Content is rendered to PNG pages with **Pillow** using a simple fixed-width text layout.
 
-| Method | DOCX | ODT | Notes |
-|--------|------|-----|-------|
-| LibreOffice + PyMuPDF (default) | ✅ | ✅ | Best overall fidelity |
-| Spire.Doc / Aspose.Words | ✅ | limited | Commercial, good DOCX quality, free tier watermark |
-| python-docx + custom rendering | partial | ❌ | Only extracts content, not true page layout |
-| GroupDocs / other SDKs | ✅ | ✅ | Commercial |
+**Important limitations of the python-docx path:**
 
-The default path is intentionally free and open-source.
+- No real layout engine — fonts, spacing, columns, floating objects, etc. are only roughly approximated.
+- Images, complex tables, headers, footers and most formatting are ignored or heavily simplified.
+- Page breaks are only respected when they appear as hard breaks in the XML.
+- Useful for quick text-only previews or environments where LibreOffice cannot be installed.
 
 ## Project structure
 
 ```
 DocToPng/
-├── app.py              # Gradio UI
-├── converter.py        # Core conversion logic
+├── app.py              # Gradio UI (method selector + gallery + ZIP)
+├── converter.py        # Both conversion backends
 ├── requirements.txt
 ├── README.md
 └── .gitignore

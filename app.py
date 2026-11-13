@@ -1,10 +1,13 @@
 """
 DocToPng – simple Gradio UI for converting DOCX / ODT documents to per-page PNGs.
+
+Supports two conversion methods for DOCX so you can compare results:
+  - LibreOffice (recommended, faithful layout)
+  - python-docx (pure Python, approximate text-only rendering)
 """
 
 from __future__ import annotations
 
-import shutil
 import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -19,43 +22,45 @@ def check_libreoffice() -> str:
     if path:
         return f"✅ LibreOffice found: `{path}`"
     return (
-        "❌ LibreOffice / OpenOffice **not found**. "
-        "Install it and make sure `soffice` or `libreoffice` is on your PATH."
+        "⚠️ LibreOffice / OpenOffice **not found**. "
+        "The 'LibreOffice' method will fail. You can still use the "
+        "**python-docx** method for DOCX files (approximate layout)."
     )
 
 
 def process(
     file_obj,
+    method: str,
     dpi: int = 150,
 ) -> Tuple[List[str], Optional[str], str]:
-    """
-    Gradio handler.
-
-    Returns
-    -------
-    gallery_images : list of file paths for the Gallery
-    zip_file       : path to the ZIP (or None)
-    status         : human-readable status message
-    """
     if file_obj is None:
         return [], None, "Please upload a .docx or .odt file."
 
-    # Gradio may give a path string or a file-like object depending on version
     if isinstance(file_obj, str):
         src = Path(file_obj)
     else:
         src = Path(file_obj.name)
 
-    if src.suffix.lower() not in {".docx", ".odt", ".doc"}:
-        return [], None, f"Unsupported file type: {src.suffix}. Use .docx or .odt."
+    suffix = src.suffix.lower()
+    if suffix not in {".docx", ".odt", ".doc"}:
+        return [], None, f"Unsupported file type: {suffix}. Use .docx or .odt."
+
+    # Normalize method name
+    method_key = "python-docx" if "python-docx" in method.lower() else "libreoffice"
+
+    if method_key == "python-docx" and suffix == ".odt":
+        return [], None, "python-docx method only works with DOCX. Use LibreOffice for ODT."
 
     try:
         work_dir = Path(tempfile.mkdtemp(prefix="doctopng_ui_"))
-        png_paths, zip_path = convert_document(src, dpi=dpi, work_dir=work_dir)
+        png_paths, zip_path = convert_document(
+            src, dpi=dpi, work_dir=work_dir, method=method_key
+        )
 
         gallery = [str(p) for p in png_paths]
         status = (
-            f"✅ Converted **{len(png_paths)}** page(s) at {dpi} DPI.\n"
+            f"✅ Converted **{len(png_paths)}** page(s) at {dpi} DPI "
+            f"using **{method_key}**.\n"
             f"ZIP archive ready for download."
         )
         return gallery, str(zip_path), status
@@ -69,10 +74,12 @@ def build_ui() -> gr.Blocks:
         gr.Markdown(
             """
             # DocToPng
-            Upload a **DOCX** (Word) or **ODT** (OpenDocument / LibreOffice) file.  
-            Each page will be rendered as a separate PNG image.
+            Upload a **DOCX** (Word) or **ODT** (OpenDocument) file.  
+            Each page is rendered as a separate PNG image.
 
-            Conversion uses LibreOffice (headless) → PDF → PyMuPDF.
+            Choose a conversion method to compare quality:
+            - **LibreOffice** — faithful visual layout (recommended, works for DOCX + ODT)
+            - **python-docx** — pure-Python parsing + simple text rendering (DOCX only, approximate)
             """
         )
 
@@ -85,6 +92,14 @@ def build_ui() -> gr.Blocks:
                     label="Upload document",
                     file_types=[".docx", ".odt", ".doc"],
                     type="filepath",
+                )
+                method = gr.Radio(
+                    choices=[
+                        "LibreOffice (faithful layout)",
+                        "python-docx (experimental / approximate)",
+                    ],
+                    value="LibreOffice (faithful layout)",
+                    label="Conversion method",
                 )
                 dpi_slider = gr.Slider(
                     minimum=72,
@@ -107,18 +122,26 @@ def build_ui() -> gr.Blocks:
 
         convert_btn.click(
             fn=process,
-            inputs=[file_input, dpi_slider],
+            inputs=[file_input, method, dpi_slider],
             outputs=[gallery, zip_output, status_box],
         )
 
         gr.Markdown(
             """
             ---
-            **Tips**
-            - Higher DPI = sharper images but larger files and slower conversion.
-            - Both DOCX and ODT go through the same LibreOffice path, so you can
-              easily compare which source format gives better visual fidelity for your documents.
-            - Make sure LibreOffice is installed before converting.
+            ### Method comparison
+
+            | Aspect              | LibreOffice              | python-docx                          |
+            |---------------------|--------------------------|--------------------------------------|
+            | Layout fidelity     | High (real engine)       | Low (text + basic wrapping only)     |
+            | Images / tables     | Preserved                | Mostly ignored                       |
+            | Headers / footers   | Yes                      | No                                   |
+            | External dependency | LibreOffice required     | None (pure Python)                   |
+            | ODT support         | Yes                      | No                                   |
+            | Best for            | Accurate page screenshots| Quick text preview / no LO installed |
+
+            The python-docx path is useful for testing or when you cannot install LibreOffice.
+            For production-quality page images, prefer the LibreOffice path.
             """
         )
 
