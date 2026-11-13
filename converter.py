@@ -2,7 +2,7 @@
 Core conversion logic.
 
 Supported inputs:
-  - PDF  → faithful per-page PNG via PyMuPDF
+  - PDF  → high-quality per-page PNG via PyMuPDF
   - DOCX → approximate per-page PNG via python-docx + Pillow
             (no real layout engine; text-only approximation)
 """
@@ -24,20 +24,55 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 # ---------------------------------------------------------------------------
-# PDF → PNG (faithful)
+# PDF → PNG (high quality)
 # ---------------------------------------------------------------------------
 
-def pdf_to_pngs(pdf_path: Path, out_dir: Path, dpi: int = 150) -> List[Path]:
-    """Render every page of a PDF to a PNG file. Returns list of PNG paths."""
+def pdf_to_pngs(pdf_path: Path, out_dir: Path, dpi: int = 200) -> List[Path]:
+    """
+    Render every page of a PDF to a high-quality PNG.
+
+    Quality choices:
+    - Explicit RGB colorspace (no unexpected gray/CMYK conversion)
+    - No alpha channel (opaque white/paper background, smaller files)
+    - Annotations / form fields included when present
+    - Scale via DPI matrix (72 pt/inch baseline)
+    - PNG is lossless, so we keep full pixmap fidelity
+    """
+    dpi = max(72, min(int(dpi), 600))
     doc = fitz.open(pdf_path)
     png_paths: List[Path] = []
+
+    # Prefer the dpi= API when available; fall back to Matrix for older PyMuPDF.
+    use_dpi_kw = True
+    try:
+        # Probe once on a dummy call signature by inspecting get_pixmap
+        import inspect
+
+        sig = inspect.signature(fitz.Page.get_pixmap)
+        use_dpi_kw = "dpi" in sig.parameters
+    except Exception:
+        use_dpi_kw = False
+
     zoom = dpi / 72.0
     matrix = fitz.Matrix(zoom, zoom)
 
     for page_index in range(len(doc)):
         page = doc.load_page(page_index)
-        pix = page.get_pixmap(matrix=matrix, alpha=False)
+
+        # Render kwargs shared by both code paths
+        render_kwargs = {
+            "alpha": False,  # opaque — avoids soft edges on white paper
+            "colorspace": fitz.csRGB,
+            "annots": True,  # include comments, stamps, form widgets
+        }
+
+        if use_dpi_kw:
+            pix = page.get_pixmap(dpi=dpi, **render_kwargs)
+        else:
+            pix = page.get_pixmap(matrix=matrix, **render_kwargs)
+
         out_file = out_dir / f"page_{page_index + 1:04d}.png"
+        # pix.save writes lossless PNG; no JPEG-style quality knob needed
         pix.save(str(out_file))
         png_paths.append(out_file)
 
@@ -105,7 +140,7 @@ def _extract_pages_from_docx(doc: Document) -> List[str]:
 def _render_text_to_pngs(
     page_texts: List[str],
     out_dir: Path,
-    dpi: int = 150,
+    dpi: int = 200,
     page_width_in: float = 8.5,
     page_height_in: float = 11.0,
     margin_in: float = 0.75,
@@ -114,6 +149,7 @@ def _render_text_to_pngs(
     Render each text block as one or more PNG pages using a simple fixed layout.
     This is intentionally approximate — it does not reproduce Word's layout engine.
     """
+    dpi = max(72, min(int(dpi), 600))
     width_px = int(page_width_in * dpi)
     height_px = int(page_height_in * dpi)
     margin_px = int(margin_in * dpi)
@@ -161,7 +197,7 @@ def _render_text_to_pngs(
             )
 
             out_file = out_dir / f"page_{page_counter:04d}.png"
-            img.save(out_file, "PNG")
+            img.save(out_file, "PNG", optimize=True)
             png_paths.append(out_file)
 
     return png_paths
@@ -170,7 +206,7 @@ def _render_text_to_pngs(
 def convert_docx_python_docx(
     input_path: Path,
     out_dir: Path,
-    dpi: int = 150,
+    dpi: int = 200,
 ) -> List[Path]:
     """
     Parse DOCX with python-docx and render approximate pages.
@@ -200,13 +236,13 @@ def create_zip(png_paths: List[Path], zip_path: Path) -> Path:
 
 def convert_document(
     input_file: str | Path,
-    dpi: int = 150,
+    dpi: int = 200,
     work_dir: Optional[Path] = None,
 ) -> Tuple[List[Path], Path]:
     """
     Full pipeline: DOCX or PDF → list of PNG paths + ZIP path.
 
-    - PDF  → PyMuPDF (faithful page rendering)
+    - PDF  → PyMuPDF (high-quality page rendering)
     - DOCX → python-docx + Pillow (approximate text layout)
 
     Returns

@@ -4,7 +4,7 @@ Simple Python web UI that turns each page of a **PDF** or **DOCX** into a separa
 
 | Input | Rendering quality | Engine |
 |-------|-------------------|--------|
-| **PDF** | Faithful (exact page look) | PyMuPDF |
+| **PDF** | High (lossless PNG, RGB, annotations) | PyMuPDF |
 | **DOCX** | Approximate (text-only layout) | python-docx + Pillow |
 
 No LibreOffice or other external tools required.
@@ -13,9 +13,22 @@ No LibreOffice or other external tools required.
 
 - Upload a `.pdf` or `.docx` file
 - One PNG per page
-- Adjustable DPI (72–300)
+- Adjustable DPI (72–400, default **200**)
 - Preview gallery + ZIP download of all pages
 - Fully local, pure-Python stack
+
+## PDF rendering quality
+
+The PDF path is tuned for sharp output:
+
+- Default **200 DPI** (screen / light print); slider goes to **400**
+- Explicit **RGB** colorspace
+- **Opaque** render (no alpha soft edges on paper background)
+- **Annotations** and form widgets included
+- **Lossless PNG** (no JPEG compression artifacts)
+- Uses PyMuPDF `dpi=` when available, otherwise an equivalent scale matrix
+
+For print or archival use, set DPI to **300**.
 
 ## Install
 
@@ -35,7 +48,7 @@ Open the URL shown in the terminal (usually http://127.0.0.1:7860).
 
 ### PDF
 
-Each page is rendered directly with **PyMuPDF** at the chosen DPI. Layout, fonts, images, and vector graphics are preserved.
+Each page is rendered with **PyMuPDF** at the chosen DPI. Layout, fonts, images, vectors, and annotations are preserved.
 
 ### DOCX
 
@@ -43,7 +56,7 @@ Each page is rendered directly with **PyMuPDF** at the chosen DPI. Layout, fonts
 2. Explicit page breaks in the XML are respected when present.
 3. **Pillow** draws simple text pages (fixed margins, basic wrapping).
 
-**DOCX limitations:** no real layout engine, images/tables/headers/footers are ignored or heavily simplified. For accurate visuals, convert the Word file to PDF first, then upload the PDF.
+**DOCX limitations:** no real layout engine; images/tables/headers/footers are ignored or simplified. For accurate visuals, convert the Word file to PDF first, then upload the PDF.
 
 ## Project structure
 

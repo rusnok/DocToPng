@@ -3,7 +3,7 @@ DocToPng – simple Gradio UI.
 
 Upload a DOCX or PDF; each page is turned into a PNG image.
 
-- PDF  → faithful rendering via PyMuPDF
+- PDF  → high-quality rendering via PyMuPDF
 - DOCX → approximate text rendering via python-docx + Pillow
 """
 
@@ -20,7 +20,7 @@ from converter import convert_document
 
 def process(
     file_obj,
-    dpi: int = 150,
+    dpi: int = 200,
 ) -> Tuple[List[str], Optional[str], str]:
     if file_obj is None:
         return [], None, "Please upload a .docx or .pdf file."
@@ -39,7 +39,7 @@ def process(
         png_paths, zip_path = convert_document(src, dpi=dpi, work_dir=work_dir)
 
         gallery = [str(p) for p in png_paths]
-        kind = "PDF (faithful)" if suffix == ".pdf" else "DOCX (approximate)"
+        kind = "PDF (high quality)" if suffix == ".pdf" else "DOCX (approximate)"
         status = (
             f"✅ Converted **{len(png_paths)}** page(s) at {dpi} DPI "
             f"from **{kind}**.\n"
@@ -60,8 +60,8 @@ def build_ui() -> gr.Blocks:
 
             | Input | Quality | How it works |
             |-------|---------|--------------|
-            | **PDF** | Faithful | PyMuPDF renders each page exactly |
-            | **DOCX** | Approximate | python-docx extracts text; Pillow draws simple pages |
+            | **PDF** | High (lossless PNG) | PyMuPDF, RGB, annotations, chosen DPI |
+            | **DOCX** | Approximate | python-docx text + Pillow layout |
             """
         )
 
@@ -74,10 +74,11 @@ def build_ui() -> gr.Blocks:
                 )
                 dpi_slider = gr.Slider(
                     minimum=72,
-                    maximum=300,
-                    value=150,
+                    maximum=400,
+                    value=200,
                     step=1,
                     label="DPI (resolution)",
+                    info="200 = sharp screen / light print · 300 = print quality · 400 = max detail",
                 )
                 convert_btn = gr.Button("Convert to PNGs", variant="primary")
 
@@ -100,11 +101,15 @@ def build_ui() -> gr.Blocks:
         gr.Markdown(
             """
             ---
-            **Notes**
-            - PDF path produces accurate page images (recommended when possible).
-            - DOCX path is text-only and approximate: no real layout, images, or complex tables.
-              Prefer converting the Word file to PDF first if you need faithful visuals.
-            - Higher DPI = sharper images, larger files, slower conversion.
+            **PDF quality tips**
+            - Default **200 DPI** is a good balance of sharpness and file size.
+            - Use **300 DPI** for print or archival screenshots.
+            - PNG is lossless; raising DPI is the main way to get more detail.
+            - Annotations and form fields are included in the render.
+
+            **DOCX note**
+            - DOCX rendering is text-only and approximate. For faithful visuals,
+              export the Word file to PDF first, then upload the PDF.
             """
         )
 
